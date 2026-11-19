@@ -1278,13 +1278,29 @@ class TCPRelay(object):
         self.add_user(uid, passwd)
 
     def update_users(self, users):
+        # Users removed from the list (over quota, suspended, terminated) and users whose password
+        # changed (password reset) lose their open connections right away, not only new ones.
+        kick = set()
         for uid in list(self.server_users.keys()):
             id = struct.unpack('<I', uid)[0]
             if id not in users:
                 self.del_user(uid)
+                kick.add(uid)
+            elif common.to_bytes(users[id]['password']) != self.server_users[uid]:
+                kick.add(uid)
         for id in users:
             uid = struct.pack('<I', id)
             self.add_user(uid, users[id])
+        if kick:
+            self.kick_users(kick)
+
+    def kick_users(self, uids):
+        handlers = [h for h in set(self._fd_to_handlers.values()) if h._user in uids]
+        for handler in handlers:
+            handler.destroy()
+        if handlers:
+            logging.info('closed %d connections of %d removed or changed users on port %d',
+                         len(handlers), len(uids), self._listen_port)
 
     def add_user(self, uid, cfg): # user: binstr[4], passwd: str
         passwd = cfg['password']

@@ -10,6 +10,11 @@ from shadowsocks import common, shell, lru_cache, obfs
 from configloader import load_config, get_config
 import importloader
 
+try:
+	import cymysql
+except ImportError:
+	import pymysql as cymysql
+
 switchrule = None
 db_instance = None
 
@@ -269,6 +274,12 @@ class TransferBase(object):
 					break
 		except KeyboardInterrupt as e:
 			pass
+		try:
+			db_instance.flush_all = True
+			db_instance.push_db_all_user()
+			logging.info('pending traffic written back before exit')
+		except Exception:
+			logging.error(traceback.format_exc())
 		db_instance.del_servers()
 		ServerPool.get_instance().stop()
 		db_instance = None
@@ -282,6 +293,7 @@ class DbTransfer(TransferBase):
 	def __init__(self):
 		super(DbTransfer, self).__init__()
 		self.user_pass = {} #记录更新此用户流量时被跳过多少次
+		self.flush_all = False #退出前写回全部未提交的流量
 		self.cfg = {
 			"host": "127.0.0.1",
 			"port": 3306,
@@ -307,7 +319,6 @@ class DbTransfer(TransferBase):
 			self.cfg.update(cfg)
 
 	def update_all_user(self, dt_transfer):
-		import cymysql
 		update_transfer = {}
 		
 		query_head = 'UPDATE user'
@@ -320,7 +331,7 @@ class DbTransfer(TransferBase):
 			transfer = dt_transfer[id]
 			#小于最低更新流量的先不更新
 			update_trs = 1024 * (2048 - self.user_pass.get(id, 0) * 64)
-			if transfer[0] + transfer[1] < update_trs and id not in self.force_update_transfer:
+			if transfer[0] + transfer[1] < update_trs and id not in self.force_update_transfer and not self.flush_all:
 				self.user_pass[id] = self.user_pass.get(id, 0) + 1
 				continue
 			if id in self.user_pass:
@@ -370,7 +381,6 @@ class DbTransfer(TransferBase):
 		return update_transfer
 
 	def pull_db_all_user(self):
-		import cymysql
 		#数据库所有用户信息
 		if self.cfg["ssl_enable"] == 1:
 			conn = cymysql.connect(host=self.cfg["host"], port=self.cfg["port"],
@@ -428,7 +438,6 @@ class Dbv3Transfer(DbTransfer):
 		self.start_time = time.time()
 
 	def update_all_user(self, dt_transfer):
-		import cymysql
 		update_transfer = {}
 
 		query_head = 'UPDATE user'
@@ -456,7 +465,7 @@ class Dbv3Transfer(DbTransfer):
 			bandwidth_thistime = bandwidth_thistime + transfer[0] + transfer[1]
 
 			update_trs = 1024 * (2048 - self.user_pass.get(id, 0) * 64)
-			if transfer[0] + transfer[1] < update_trs:
+			if transfer[0] + transfer[1] < update_trs and not self.flush_all:
 				self.user_pass[id] = self.user_pass.get(id, 0) + 1
 				continue
 			if id in self.user_pass:

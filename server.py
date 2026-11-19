@@ -19,6 +19,7 @@ import time
 import sys
 import threading
 import os
+import signal
 
 if __name__ == '__main__':
 	import inspect
@@ -53,6 +54,12 @@ def main():
 		else:
 			thread = MainThread(db_transfer.Dbv3Transfer)
 		thread.start()
+
+		# docker stop / systemctl stop send SIGTERM: end the sync loop so pending traffic is written back.
+		def on_term(signum, frame):
+			thread.stop()
+		signal.signal(signal.SIGTERM, on_term)
+
 		try:
 			while thread.is_alive():
 				thread.join(10.0)
