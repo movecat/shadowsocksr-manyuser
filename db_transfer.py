@@ -589,6 +589,62 @@ class Dbv3Transfer(DbTransfer):
 
 		return str(round((traffic / 1048576.0), 2)) + "MB";
 
+class WebApiTransfer(DbTransfer):
+	"""Panel mode (API_INTERFACE = 'legendsockapi'): users and traffic go through the panel's node API
+	(LegendSock nodeapi.php), so the node holds no database credentials.
+	usermuapi.json: {"url": "https://panel/modules/addons/legendsock/nodeapi.php", "key": "...", "transfer_mul": 1.0}
+	When the panel's node settings change (config_version), the node stops so that Docker restarts it
+	with the new settings."""
+	def __init__(self):
+		self.config_version = None
+		super(WebApiTransfer, self).__init__()
+
+	def load_cfg(self):
+		import json
+		config_path = get_config().MUAPI_CONFIG
+		with open(config_path, 'rb') as f:
+			self.cfg.update(json.loads(f.read().decode('utf8')))
+
+	def request(self, method, action, payload=None):
+		import json
+		from urllib import request as urlrequest
+		data = None if payload is None else json.dumps(payload).encode('utf-8')
+		req = urlrequest.Request(self.cfg['url'] + '?action=' + action, data=data, method=method, headers={
+			'X-Node-Key': self.cfg['key'], 'Content-Type': 'application/json', 'User-Agent': 'kcloud-node'})
+		with urlrequest.urlopen(req, timeout=30) as resp:
+			reply = json.loads(resp.read().decode('utf-8'))
+		if not reply.get('ok'):
+			raise Exception('node api %s: %s' % (action, reply.get('error')))
+		return reply
+
+	def update_all_user(self, dt_transfer):
+		update_transfer = {}
+		traffic = {}
+		for id in dt_transfer.keys():
+			transfer = dt_transfer[id]
+			update_trs = 1024 * (2048 - self.user_pass.get(id, 0) * 64)
+			if transfer[0] + transfer[1] < update_trs and id not in self.force_update_transfer and not self.flush_all:
+				self.user_pass[id] = self.user_pass.get(id, 0) + 1
+				continue
+			if id in self.user_pass:
+				del self.user_pass[id]
+			traffic[str(id)] = [int(transfer[0] * self.cfg["transfer_mul"]), int(transfer[1] * self.cfg["transfer_mul"])]
+			update_transfer[id] = transfer
+		if traffic:
+			self.request('POST', 'traffic', {'traffic': traffic, 'online': len(self.onlineuser_cache),
+				'version': 'ssr-modern'})
+		return update_transfer
+
+	def pull_db_all_user(self):
+		reply = self.request('GET', 'users')
+		version = reply.get('config_version')
+		if self.config_version is None:
+			self.config_version = version
+		elif version != self.config_version:
+			logging.warning('panel node settings changed, restarting to apply them')
+			self.event.set()
+		return reply['users']
+
 class MuJsonTransfer(TransferBase):
 	def __init__(self):
 		super(MuJsonTransfer, self).__init__()

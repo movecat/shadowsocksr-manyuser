@@ -51,6 +51,8 @@ def main():
 			thread = MainThread(db_transfer.MuJsonTransfer)
 		elif get_config().API_INTERFACE == 'sspanelv2':
 			thread = MainThread(db_transfer.DbTransfer)
+		elif get_config().API_INTERFACE == 'legendsockapi':
+			thread = MainThread(db_transfer.WebApiTransfer)
 		else:
 			thread = MainThread(db_transfer.Dbv3Transfer)
 		thread.start()
